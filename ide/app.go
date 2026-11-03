@@ -47,15 +47,16 @@ type App struct {
 	imEd Editor
 	imm  bool // foco en la ventana Immediate
 
-	menu     MenuBar
-	dialogs  []*Dialog
-	clip     string
-	status   string
-	lay      layout
-	quit     bool
-	events   chan tcell.Event
-	pasting  bool
-	pasteBuf []rune
+	menu       MenuBar
+	dialogs    []*Dialog
+	clip       string
+	clipColumn bool
+	status     string
+	lay        layout
+	quit       bool
+	events     chan tcell.Event
+	pasting    bool
+	pasteBuf   []rune
 
 	syntaxCheck bool
 	lineNumbers bool
@@ -85,7 +86,7 @@ type App struct {
 
 // New crea el IDE; si path no es vacío abre ese archivo.
 func New(path string) (*App, error) {
-	a := &App{syntaxCheck: true, autoFormat: true, vmDone: make(chan error, 1), curStmt: Loc{View: -1}}
+	a := &App{syntaxCheck: true, autoFormat: true, lineNumbers: true, vmDone: make(chan error, 1), curStmt: Loc{View: -1}}
 	a.doc = NewDocument()
 	if path != "" {
 		d, err := LoadDocument(path)
@@ -98,7 +99,10 @@ func New(path string) (*App, error) {
 	a.out = screen.New(80, 25)
 	a.imv = &View{Lines: []string{""}}
 	a.ed.clipboard = &a.clip
+	a.ed.clipColumn = &a.clipColumn
+	a.ed.Colorize = highlight
 	a.imEd.clipboard = &a.clip
+	a.imEd.clipColumn = &a.clipColumn
 	a.ed.OnLineExit = a.lineExit
 	a.ed.OnChange = func() { a.doc.Touch(); a.curStmt = Loc{View: -1} }
 	a.ed.setView(a.doc.Views[0])

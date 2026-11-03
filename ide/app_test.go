@@ -207,13 +207,6 @@ func TestIDELineNumbers(t *testing.T) {
 	h := newHarness(t, 80, 25, "")
 	defer h.close()
 	h.typeText("cls\nprint 1\nprint 2\n")
-	if strings.Contains(h.text(), "│  1 CLS") {
-		t.Fatal("los números de línea deberían estar apagados por defecto")
-	}
-	// Options → Line Numbers
-	h.key(tcell.KeyRune, 'o', tcell.ModAlt)
-	h.key(tcell.KeyRune, 'l', 0)
-	h.wait()
 	for _, want := range []string{"│  1 CLS", "│  2 PRINT 1", "│  3 PRINT 2", "│  4 "} {
 		h.expect(want)
 	}
@@ -225,6 +218,13 @@ func TestIDELineNumbers(t *testing.T) {
 		t.Errorf("cursor en %d:%d, se esperaba 1:0", v.Row, v.Col)
 	}
 	h.expect("00002:001")
+	// Options → Line Numbers permite desactivarlos.
+	h.key(tcell.KeyRune, 'o', tcell.ModAlt)
+	h.key(tcell.KeyRune, 'l', 0)
+	h.wait()
+	if strings.Contains(h.text(), "│  1 CLS") {
+		t.Fatal("los números de línea deberían poder desactivarse")
+	}
 }
 
 func TestHighlight(t *testing.T) {

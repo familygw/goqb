@@ -41,6 +41,11 @@ func (a *App) buildMenus() {
 			{Label: "&Copy", Shortcut: "Ctrl+Ins", Action: func() { a.activeEditor().copySel() }},
 			{Label: "&Paste", Shortcut: "Shift+Ins", Action: func() { a.activeEditor().paste() }},
 			{Label: "Cl&ear", Shortcut: "Del", Action: func() { a.activeEditor().deleteSelection() }},
+			{Label: "C&olumn Selection", Shortcut: "Alt+Shift+arrows", Action: func() {
+				e := a.activeEditor()
+				e.columnMode = !e.columnMode
+				e.sel, e.rectSel = false, false
+			}, Checked: func() bool { return a.activeEditor().columnMode }, Enabled: always},
 			{Sep: true},
 			{Label: "New &SUB...", Action: func() { a.newProcDialog("SUB") }},
 			{Label: "New &FUNCTION...", Action: func() { a.newProcDialog("FUNCTION") }},
@@ -409,6 +414,7 @@ func (a *App) help() {
 		"",
 		"Edición: Shift+flechas selecciona · Shift+Del corta · Ctrl+Ins copia",
 		"Shift+Ins pega · Ctrl+Y borra la línea · Ctrl+Z deshace · Ins sobrescribe",
+		"Alt+Shift+flechas: bloque rectangular · Edit > Column Selection: modo columnas",
 		"",
 		"En macOS: activá \"Option como Meta\" en la terminal para usar Alt.")
 }

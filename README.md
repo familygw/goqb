@@ -41,6 +41,32 @@ bin/goqbc check -I ~/qb45/include prog.mak
 
 En macOS conviene activar "Option como Meta" en la terminal para que Alt+letra funcione; F10 y el mouse funcionan siempre.
 
+El editor admite selección normal con Shift+flechas y por palabras con
+Ctrl+Shift+izquierda/derecha. Alt+Shift+flechas selecciona un bloque rectangular.
+También se puede activar **Edit → Column Selection** y usar Shift+flechas para
+seleccionar columnas sin depender de Alt. El bloque se puede copiar, cortar,
+borrar o reemplazar escribiendo o pegando texto; al copiar y pegar dentro del IDE
+conserva su forma rectangular, y Ctrl+Z deshace la operación completa.
+Command+Option+Shift+flechas sólo funciona si la terminal transmite los
+modificadores; no se puede capturar una combinación que macOS o la terminal
+intercepte. Estos atajos usan el portapapeles interno del IDE.
+
+En Terminal de macOS, si Shift+izquierda/derecha selecciona pero
+Shift+arriba/abajo no, configurá **Terminal → Configuración → Perfiles →
+Teclado** en el perfil que usás. Agregá estas combinaciones con la acción
+**Enviar texto**:
+
+| Tecla | Modificador | Texto enviado |
+|---|---|---|
+| Flecha arriba | Shift | `\033[1;2A` |
+| Flecha abajo | Shift | `\033[1;2B` |
+
+`\033` representa el carácter Escape real: en el campo de texto presioná
+Escape y luego escribí `[1;2A` o `[1;2B`. Terminal suele mostrar ese carácter
+como `\033`. No envíes los caracteres literales de la cadena `\033`.
+Sin estos mapeos, Terminal puede enviar las mismas secuencias que para las
+flechas normales; el IDE no puede reconstruir el modificador Shift.
+
 ## Estado
 
 | Fase | Contenido | Estado |

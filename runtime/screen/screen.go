@@ -90,7 +90,10 @@ func (t *Text) resetView() {
 
 func (t *Text) attr() byte {
 	a := byte(t.fg&15) | byte(t.bg&7)<<4
-	if t.fg >= 16 || t.bg >= 8 {
+	// COLOR usa 16..31 de frente para parpadear. El bit alto del
+	// fondo se descarta; no debe convertirse en parpadeo (Nibbles
+	// usa COLOR c,c con colores brillantes para imprimir bloques sólidos).
+	if t.fg >= 16 {
 		a |= 0x80
 	}
 	return a

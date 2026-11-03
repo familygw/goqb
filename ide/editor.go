@@ -12,28 +12,31 @@ const maxUndo = 200
 // Editor edita una View. La columna del cursor puede pasar el fin de la
 // línea (como en QB); al escribir allí se completa con espacios.
 type Editor struct {
-	v         *View
-	overwrite bool
-	sel       bool
-	selRow    int
-	selCol    int
-	lineDirty bool
-	lastEdit  string
-	area      rect
+	v          *View
+	overwrite  bool
+	sel        bool
+	selRow     int
+	selCol     int
+	columnMode bool // selección rectangular desde el menú
+	rectSel    bool // forma de la selección activa
+	lineDirty  bool
+	lastEdit   string
+	area       rect
 
 	// OnLineExit se invoca al dejar una línea modificada (formato, chequeo
 	// de sintaxis, creación de SUB). Puede modificar las líneas.
 	OnLineExit func(row int)
 	// OnChange se invoca con cada modificación del texto.
-	OnChange  func()
-	clipboard *string
+	OnChange   func()
+	clipboard  *string
+	clipColumn *bool
 	// Colorize, si no es nil, devuelve un estilo por runa de una línea.
 	Colorize func(line string) []tcell.Style
 }
 
 func (e *Editor) setView(v *View) {
 	e.v = v
-	e.sel, e.lineDirty, e.lastEdit = false, false, ""
+	e.sel, e.rectSel, e.lineDirty, e.lastEdit = false, false, false, ""
 	e.clamp()
 }
 
@@ -98,6 +101,7 @@ func (e *Editor) moveTo(row, col int, extend bool) {
 		e.sel, e.selRow, e.selCol = true, v.Row, v.Col
 	} else if !extend {
 		e.sel = false
+		e.rectSel = false
 	}
 	if row != v.Row {
 		e.leaveLine()
@@ -159,6 +163,9 @@ func (e *Editor) selection() (r1, c1, r2, c2 int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	r1, c1, r2, c2 = e.selRow, e.selCol, e.v.Row, e.v.Col
+	if e.rectSel {
+		return min(r1, r2), min(c1, c2), max(r1, r2), max(c1, c2), c1 != c2
+	}
 	if r1 > r2 || r1 == r2 && c1 > c2 {
 		r1, c1, r2, c2 = r2, c2, r1, c1
 	}
@@ -186,6 +193,14 @@ func (e *Editor) selectedText() string {
 	if !ok {
 		return ""
 	}
+	if e.rectSel {
+		rows := make([]string, 0, r2-r1+1)
+		for r := r1; r <= r2; r++ {
+			text := string(sliceRunes(e.line(r), c1, c2))
+			rows = append(rows, text+strings.Repeat(" ", c2-c1-len([]rune(text))))
+		}
+		return strings.Join(rows, "\n")
+	}
 	if r1 == r2 {
 		return string(sliceRunes(e.line(r1), c1, c2))
 	}
@@ -207,6 +222,10 @@ func (e *Editor) deleteSelection() bool {
 		e.sel = false
 		return false
 	}
+	if e.rectSel {
+		e.replaceBlock("")
+		return true
+	}
 	e.pushUndo("del")
 	head := sliceRunes(e.line(r1), 0, c1)
 	if len(head) < c1 {
@@ -225,6 +244,10 @@ func (e *Editor) deleteSelection() bool {
 // insertText inserta texto (posiblemente multilínea) en el cursor.
 func (e *Editor) insertText(s string) {
 	if s == "" {
+		return
+	}
+	if _, _, _, _, ok := e.selection(); ok && e.rectSel {
+		e.replaceBlock(s)
 		return
 	}
 	e.deleteSelection()
@@ -260,6 +283,10 @@ func (e *Editor) insertText(s string) {
 // ------------------------------------------------------------- edición
 
 func (e *Editor) typeRune(r rune) {
+	if _, _, _, _, ok := e.selection(); ok && e.rectSel {
+		e.replaceBlock(string(r))
+		return
+	}
 	e.deleteSelection()
 	e.pushUndo("type")
 	v := e.v
@@ -351,7 +378,7 @@ func (e *Editor) delete() {
 func (e *Editor) deleteLine() {
 	e.pushUndo("")
 	v := e.v
-	*e.clipboard = v.Lines[v.Row] + "\n"
+	e.setClipboard(v.Lines[v.Row]+"\n", false)
 	if len(v.Lines) == 1 {
 		v.Lines[0] = ""
 	} else {
@@ -366,18 +393,79 @@ func (e *Editor) deleteLine() {
 
 func (e *Editor) copySel() {
 	if t := e.selectedText(); t != "" {
-		*e.clipboard = t
+		e.setClipboard(t, e.rectSel)
 	}
 }
 
 func (e *Editor) cutSel() {
 	if t := e.selectedText(); t != "" {
-		*e.clipboard = t
+		e.setClipboard(t, e.rectSel)
 		e.deleteSelection()
 	}
 }
 
-func (e *Editor) paste() { e.insertText(*e.clipboard) }
+func (e *Editor) setClipboard(text string, column bool) {
+	*e.clipboard = text
+	if e.clipColumn != nil {
+		*e.clipColumn = column
+	}
+}
+
+func (e *Editor) paste() {
+	if e.clipColumn != nil && *e.clipColumn && *e.clipboard != "" {
+		// Un bloque pegado sin selección conserva las líneas existentes.
+		if _, _, _, _, ok := e.selection(); ok && !e.rectSel {
+			e.insertText(*e.clipboard)
+			return
+		}
+		e.replaceBlock(*e.clipboard)
+		return
+	}
+	e.insertText(*e.clipboard)
+}
+
+// replaceBlock reemplaza columnas sin unir líneas. Una sola línea se repite
+// en cada fila seleccionada; varias líneas se insertan una por fila.
+func (e *Editor) replaceBlock(text string) {
+	v := e.v
+	r1, c1, r2, c2, ok := e.selection()
+	if !ok {
+		r1, c1, r2, c2 = v.Row, v.Col, v.Row, v.Col
+	}
+	parts := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	last := max(r2, r1+len(parts)-1)
+	e.pushUndo("")
+	for len(v.Lines) <= last {
+		v.Lines = append(v.Lines, "")
+	}
+	for r := r1; r <= last; r++ {
+		var replacement string
+		if len(parts) == 1 {
+			replacement = parts[0]
+		} else if r-r1 < len(parts) {
+			replacement = parts[r-r1]
+		}
+		line := e.line(r)
+		end := c1
+		if r <= r2 {
+			end = c2
+		}
+		head := string(sliceRunes(line, 0, c1))
+		if replacement != "" && len(line) < c1 {
+			head += strings.Repeat(" ", c1-len(line))
+		}
+		v.Lines[r] = strings.TrimRight(head+replacement+string(sliceRunes(line, end, len(line))), " ")
+	}
+	v.Row, v.Col = r1, c1
+	if text != "" {
+		v.Row = last
+		v.Col += len([]rune(parts[len(parts)-1]))
+	}
+	e.sel, e.rectSel, e.lineDirty = false, false, false
+	e.lastEdit = ""
+	e.changed()
+	e.ensureVisible()
+}
 
 func isWord(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '$' || r == '_' || r == '.'
@@ -426,6 +514,31 @@ func (e *Editor) HandleKey(ev *tcell.EventKey) bool {
 	v := e.v
 	shift := ev.Modifiers()&tcell.ModShift != 0
 	ctrl := ev.Modifiers()&tcell.ModCtrl != 0
+	// Alt+Shift (también con Meta/Command si el terminal lo transmite).
+	arrow := ev.Key() == tcell.KeyUp || ev.Key() == tcell.KeyDown || ev.Key() == tcell.KeyLeft || ev.Key() == tcell.KeyRight
+	if shift && arrow {
+		block := e.columnMode || ev.Modifiers()&tcell.ModAlt != 0
+		if !e.sel || block {
+			e.rectSel = block
+		}
+		if e.rectSel {
+			dr, dc := 0, 0
+			switch ev.Key() {
+			case tcell.KeyUp:
+				dr = -1
+			case tcell.KeyDown:
+				dr = 1
+			case tcell.KeyLeft:
+				dc = -1
+			case tcell.KeyRight:
+				dc = 1
+			}
+			e.moveTo(v.Row+dr, v.Col+dc, true)
+			return true
+		}
+	} else if shift && !e.sel {
+		e.rectSel = false
+	}
 	switch ev.Key() {
 	case tcell.KeyUp:
 		if ctrl { // Ctrl+↑: desplaza sin mover el cursor
@@ -533,6 +646,9 @@ func (e *Editor) Click(x, y int, extend bool) {
 	if !e.area.contains(x, y) {
 		return
 	}
+	if extend && !e.sel {
+		e.rectSel = e.columnMode
+	}
 	row := e.v.Top + y - e.area.y
 	col := e.v.Left + x - e.area.x
 	if row >= len(e.v.Lines) {
@@ -584,7 +700,9 @@ func (e *Editor) Draw(c canvas, area rect, focused bool, curStmt int) (int, int)
 			}
 			if hasSel && row >= r1 && row <= r2 {
 				in := true
-				if row == r1 && col < c1 || row == r2 && col >= c2 {
+				if e.rectSel {
+					in = col >= c1 && col < c2
+				} else if row == r1 && col < c1 || row == r2 && col >= c2 {
 					in = false
 				}
 				if in {
