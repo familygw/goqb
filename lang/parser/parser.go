@@ -21,7 +21,7 @@ type Error struct {
 	Msg string
 }
 
-func (e Error) Error() string { return fmt.Sprintf("%s: %s", e.Pos, e.Msg) }
+func (e *Error) Error() string { return fmt.Sprintf("%s: %s", e.Pos, e.Msg) }
 
 // Parser mantiene el estado del análisis de un archivo.
 type Parser struct {
