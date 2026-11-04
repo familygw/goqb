@@ -57,11 +57,22 @@ type VM struct {
 	ended   bool
 
 	stop atomic.Bool
+
+	// Debug, si no es nil, habilita breakpoints y ejecución paso a paso.
+	Debug  *Debugger
+	inEval bool
+
+	mem *memory // modelo de memoria de 16 bits (PEEK/POKE/VARPTR/CALL ABSOLUTE)
+
+	// Loader carga los programas de CHAIN y RUN "archivo" (nil: no soportado).
+	Loader Loader
+	// OnChain, si no es nil, se llama cuando CHAIN o RUN cambian el programa.
+	OnChain func(*Program)
 }
 
 // New crea una VM lista para ejecutar prog sobre con.
 func New(prog *Program, con Console) *VM {
-	m := &VM{Prog: prog, Con: con, handler: -1, seed: 0x50000, files: map[int]*qfile{}, Sound: &SilentSound{}}
+	m := &VM{Prog: prog, Con: con, handler: -1, seed: 0x50000, files: map[int]*qfile{}, Sound: &SilentSound{}, Loader: DefaultLoader}
 	m.Reset()
 	return m
 }
@@ -77,6 +88,7 @@ func (m *VM) Reset() {
 	m.pc = m.Prog.Entry
 	m.handler, m.inHandler, m.errCode, m.erl = -1, false, 0, 0
 	m.dataPtr = 0
+	m.defSeg, m.mem = dgroupSeg, nil
 	m.closeAll()
 	m.out = nil
 	m.started, m.ended = false, false
@@ -113,6 +125,12 @@ func (m *VM) Run() error {
 			return nil
 		case errors.Is(err, errStopped):
 			return m.runtimeError(ErrBreak)
+		case errors.Is(err, errPaused):
+			return m.runtimeError(ErrPaused)
+		case errors.Is(err, errEvalDone):
+			return nil
+		case errors.Is(err, errRestart):
+			continue
 		}
 		var qe *Error
 		if errors.As(err, &qe) && m.handler >= 0 && !m.inHandler {
@@ -368,9 +386,11 @@ func (m *VM) exec() error {
 			m.push(r)
 		case OpStmt:
 			n := int(in.B)
-			args := m.stack[len(m.stack)-n:]
-			err = Statements[in.A].Fn(m, args)
-			m.stack = m.stack[:len(m.stack)-n]
+			base := len(m.stack) - n
+			err = Statements[in.A].Fn(m, m.stack[base:])
+			if len(m.stack) >= base { // RUN y CHAIN vacían la pila
+				m.stack = m.stack[:base]
+			}
 		case OpForCmp:
 			step := m.pop()
 			lim := m.pop()
@@ -434,14 +454,20 @@ func (m *VM) exec() error {
 		case OpEnd:
 			m.closeAll()
 			return errEnd
-		case OpStop:
-			return errStopped
+		case OpStop: // STOP: pausa, se puede continuar en la sentencia siguiente
+			return errPaused
 		case OpUnsupported:
 			err = ErrAdvancedFeature
 		case OpEvt:
-			if m.ev.enabled > 0 {
+			if m.Debug != nil && m.Prog.isStmtStart(m.pc-1) && m.debugCheck(m.pc-1) {
+				m.pc--
+				return errPaused
+			}
+			if m.ev.enabled > 0 && !m.inEval {
 				m.checkEvents()
 			}
+		case OpEvalDone:
+			return errEvalDone
 		case OpError:
 			v, e := ToInt(m.pop())
 			if e != nil {

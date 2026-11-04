@@ -33,6 +33,8 @@ var (
 	stScroll     = termrun.Style(0, 7)
 	stDesk       = termrun.Style(7, 0)
 	stCurStmt    = termrun.Style(15, 1)
+	stBreak      = termrun.Style(15, 4) // línea con breakpoint
+	stWatch      = termrun.Style(0, 7)  // ventana de watches
 	stGutter     = termrun.Style(3, 1)  // números de línea
 	stGutterCur  = termrun.Style(15, 1) // número de la línea actual
 )

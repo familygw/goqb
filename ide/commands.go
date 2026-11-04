@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"goqb/compiler"
 	"goqb/lang/ast"
@@ -15,6 +16,7 @@ import (
 	"goqb/lang/format"
 	"goqb/lang/parser"
 	"goqb/lang/source"
+	"goqb/runtime/bundle"
 	"goqb/runtime/sound"
 	"goqb/vm"
 )
@@ -24,7 +26,6 @@ const version = "0.3.0"
 func (a *App) buildMenus() {
 	always := func() bool { return true }
 	running := func() bool { return a.canContinue }
-	never := func() bool { return false }
 	a.menu = MenuBar{open: -1, Menus: []*Menu{
 		{Title: "&File", Items: []*MenuItem{
 			{Label: "&New Program", Action: a.newProgram},
@@ -66,23 +67,37 @@ func (a *App) buildMenus() {
 			{Label: "Co&ntinue", Shortcut: "F5", Action: func() { a.start(false) }, Enabled: running},
 			{Label: "Modify &COMMAND$...", Action: a.commandDialog},
 			{Sep: true},
-			{Label: "Make E&XE File...", Enabled: never},
+			{Label: "Make E&XE File...", Action: a.makeExeDialog},
 		}},
 		{Title: "&Debug", Items: []*MenuItem{
-			{Label: "Add &Watch...", Enabled: never},
-			{Label: "&Step", Shortcut: "F8", Enabled: never},
-			{Label: "&Procedure Step", Shortcut: "F10", Enabled: never},
-			{Label: "Toggle &Breakpoint", Shortcut: "F9", Enabled: never},
-			{Label: "Set &Next Statement", Enabled: never},
+			{Label: "Add &Watch...", Action: func() { a.addWatchDialog(false) }},
+			{Label: "&Instant Watch...", Shortcut: "Shift+F9", Action: a.instantWatch},
+			{Label: "Watch&point...", Action: func() { a.addWatchDialog(true) }},
+			{Label: "&Delete Watch...", Action: a.deleteWatchDialog, Enabled: func() bool { return len(a.watches) > 0 }},
+			{Sep: true},
+			{Label: "&Step", Shortcut: "F8", Action: func() { a.debugRun(vm.DebugStepInto) }},
+			{Label: "&Procedure Step", Shortcut: "F10", Action: func() { a.debugRun(vm.DebugStepOver) }},
+			{Label: "Step O&ut", Shortcut: "Shift+F8", Action: func() { a.debugRun(vm.DebugStepOut) }},
+			{Label: "Run to &Cursor", Shortcut: "F7", Action: a.runToCursor},
+			{Sep: true},
+			{Label: "Toggle &Breakpoint", Shortcut: "F9", Action: a.toggleBreakpoint},
+			{Label: "C&lear All Breakpoints", Action: a.clearBreakpoints},
+			{Label: "Set &Next Statement", Action: a.setNextStatement, Enabled: running},
+			{Sep: true},
+			{Label: "Ca&lls...", Action: a.callsDialog, Enabled: running},
+			{Label: "&History On", Action: func() { a.historyOn = !a.historyOn; a.syncDebugger() }, Checked: func() bool { return a.historyOn }, Enabled: always},
+			{Label: "Show Histor&y...", Action: a.historyDialog},
 		}},
 		{Title: "&Options", Items: []*MenuItem{
-			{Label: "&Syntax Checking", Action: func() { a.syntaxCheck = !a.syntaxCheck }, Checked: func() bool { return a.syntaxCheck }, Enabled: always},
-			{Label: "&Auto Format", Action: func() { a.autoFormat = !a.autoFormat }, Checked: func() bool { return a.autoFormat }, Enabled: always},
+			{Label: "&Syntax Checking", Action: func() { a.syntaxCheck = !a.syntaxCheck; a.saveConfig() }, Checked: func() bool { return a.syntaxCheck }, Enabled: always},
+			{Label: "&Auto Format", Action: func() { a.autoFormat = !a.autoFormat; a.saveConfig() }, Checked: func() bool { return a.autoFormat }, Enabled: always},
 			{Label: "Syntax &Coloring", Action: a.toggleColoring, Checked: func() bool { return a.ed.Colorize != nil }, Enabled: always},
-			{Label: "&Line Numbers", Action: func() { a.lineNumbers = !a.lineNumbers }, Checked: func() bool { return a.lineNumbers }, Enabled: always},
+			{Label: "&Line Numbers", Action: func() { a.lineNumbers = !a.lineNumbers; a.saveConfig() }, Checked: func() bool { return a.lineNumbers }, Enabled: always},
 		}},
 		{Title: "&Help", Items: []*MenuItem{
-			{Label: "&Keyboard...", Shortcut: "F1", Action: a.help},
+			{Label: "&Index...", Action: a.helpIndex},
+			{Label: "&Topic", Shortcut: "F1", Action: a.contextHelp},
+			{Label: "&Keyboard...", Action: a.help},
 			{Label: "&About...", Action: a.about},
 		}},
 	}}
@@ -179,7 +194,7 @@ func (a *App) mainPath() string {
 func (a *App) compile(quiet bool) bool {
 	src, locs := a.doc.Source()
 	main := a.mainPath()
-	ld := &source.Loader{ReadFile: func(p string) ([]byte, error) {
+	ld := &source.Loader{IncludePath: a.includePath, ReadFile: func(p string) ([]byte, error) {
 		if p == main {
 			return src, nil
 		}
@@ -227,6 +242,7 @@ func (a *App) start(restart bool) {
 		return
 	}
 	if !restart && a.canContinue && a.m != nil && a.progRev == a.doc.rev {
+		a.syncDebugger()
 		a.curStmt = Loc{View: -1}
 		a.out.Rearm()
 		a.begin(func() error { return a.m.Run() }, false)
@@ -239,6 +255,7 @@ func (a *App) start(restart bool) {
 	a.m = vm.New(a.prog, a.out)
 	a.m.Command = a.command
 	a.m.Sound = sound.Device()
+	a.syncDebugger()
 	a.curStmt = Loc{View: -1}
 	a.begin(func() error { return a.m.Run() }, false)
 }
@@ -252,6 +269,7 @@ func (a *App) restart() {
 
 func (a *App) begin(run func() error, fromImm bool) {
 	a.mode = modeRun
+	a.runStart, a.outShown = time.Now(), false
 	a.fromImm = fromImm
 	a.canContinue = false
 	go func() { a.vmDone <- run() }()
@@ -259,8 +277,17 @@ func (a *App) begin(run func() error, fromImm bool) {
 
 // finished procesa el fin de la ejecución.
 func (a *App) finished(err error) {
+	if a.immBreak { // Immediate sobre un programa detenido: se puede seguir depurando
+		a.immBreak = false
+		a.canContinue = true
+		a.evalWatches()
+	}
 	if err == nil {
-		a.mode = modeOutput // "Press any key to continue"
+		if a.outShown || !a.canContinue {
+			a.mode = modeOutput // "Press any key to continue"
+		} else {
+			a.mode = modeEdit
+		}
 		return
 	}
 	a.mode = modeEdit
@@ -269,12 +296,26 @@ func (a *App) finished(err error) {
 		a.message("", err.Error())
 		return
 	}
-	if errors.Is(re.Err, vm.ErrBreak) {
-		a.canContinue = !a.fromImm
-		if a.gotoDiag(re.File, re.Line, re.Col, a.locs) {
-			a.curStmt = Loc{View: a.cur, Line: a.doc.Views[a.cur].Row}
+	if a.m != nil && a.m.Prog != a.prog { // el programa hizo CHAIN o RUN "archivo"
+		where := filepath.Base(re.File) + ":" + itoa(re.Line)
+		if errors.Is(re.Err, vm.ErrPaused) || errors.Is(re.Err, vm.ErrBreak) {
+			a.canContinue = true
+			a.status = "Interrumpido en " + where + ": F5 continúa · Shift+F5 reinicia"
+			return
 		}
-		a.status = "Interrumpido: F5 continúa, Shift+F5 reinicia"
+		a.message("", where+": "+re.Err.Error())
+		return
+	}
+	if errors.Is(re.Err, vm.ErrPaused) {
+		a.pausedAt(re, "Detenido: F5 continúa · F8 paso · F10 procedimiento · Shift+F5 reinicia")
+		return
+	}
+	if errors.Is(re.Err, vm.ErrBreak) {
+		if a.fromImm {
+			a.status = "Interrumpido"
+			return
+		}
+		a.pausedAt(re, "Interrumpido: F5 continúa · F8 paso · Shift+F5 reinicia")
 		return
 	}
 	if !a.fromImm {
@@ -305,6 +346,17 @@ func (a *App) immediateEnter() {
 	f, errs := parser.ParseFile("Immediate", cp437.Encode(line))
 	if len(errs) > 0 {
 		a.message("", errs[0].Msg)
+		return
+	}
+	if a.paused() { // ejecutar en el procedimiento detenido y poder seguir
+		entry, diags := a.comp.ImmediateIn(f.Stmts, a.m.CurrentProc())
+		if len(diags) > 0 {
+			a.message("", diags[0].Msg)
+			return
+		}
+		a.out.Rearm()
+		a.immBreak = true
+		a.begin(func() error { _, err := a.m.Eval(entry); return err }, true)
 		return
 	}
 	if a.comp == nil || a.progRev != a.doc.rev || a.m == nil {
@@ -393,6 +445,48 @@ func (a *App) newProcDialog(kind string) {
 		}})
 }
 
+// makeExeDialog genera un ejecutable independiente (runtime + programa compilado).
+func (a *App) makeExeDialog() {
+	host := bundle.Host()
+	targets := []string{host.String()}
+	for _, t := range []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64"} {
+		if t != targets[0] {
+			targets = append(targets, t)
+		}
+	}
+	name := "PROGRAM"
+	if a.doc.Path != "" {
+		name = strings.TrimSuffix(a.doc.Path, filepath.Ext(a.doc.Path))
+	}
+	in := &TextInput{Label: "EXE File Name:", Width: 40}
+	in.set(name)
+	list := &ListBox{Label: "Target", Items: targets, Height: len(targets) + 1, Width: 40}
+	a.pushDialog(&Dialog{Title: "Make EXE File", Input: in, List: list, Buttons: []string{"Make EXE", "Cancel"},
+		OnClose: func(d *Dialog, b int) bool {
+			out := strings.TrimSpace(d.InputText())
+			if b != 0 || out == "" {
+				return true
+			}
+			if a.prog == nil || a.progRev != a.doc.rev {
+				if !a.compile(false) {
+					return true
+				}
+			}
+			t, _ := bundle.ParseTarget(targets[d.List.Sel])
+			stub, err := bundle.FindStub(t)
+			if err == nil {
+				out = t.ExeName(out)
+				err = bundle.Write(stub, out, a.prog)
+			}
+			if err != nil {
+				a.message("", err.Error())
+				return true
+			}
+			a.status = "Generado " + out + " (" + t.String() + ")"
+			return true
+		}})
+}
+
 func (a *App) commandDialog() {
 	in := &TextInput{Label: "Command Line:", Width: 40}
 	in.set(a.command)
@@ -407,7 +501,8 @@ func (a *App) commandDialog() {
 
 func (a *App) help() {
 	a.message("Teclado",
-		"F1 Ayuda          F2 Lista de SUBs     Shift+F2 SUB siguiente",
+		"F1 Ayuda de la palabra clave bajo el cursor (o esta pantalla)",
+		"F2 Lista de SUBs     Shift+F2 SUB siguiente",
 		"F3 Repetir búsqueda   F4 Pantalla de salida",
 		"F5 Ejecutar/Continuar   Shift+F5 Ejecutar desde el inicio",
 		"F6 Editor/Immediate   F10 o Alt+letra: menús   Ctrl+Break: detener",
@@ -691,4 +786,5 @@ func (a *App) toggleColoring() {
 	} else {
 		a.ed.Colorize = nil
 	}
+	a.saveConfig()
 }

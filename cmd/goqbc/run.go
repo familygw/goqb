@@ -1,21 +1,18 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/term"
-
 	"goqb/compiler"
 	"goqb/lang/check"
 	"goqb/lang/source"
-	"goqb/runtime/sound"
-	"goqb/runtime/termrun"
-	"goqb/runtime/window"
+	"goqb/runtime/bundle"
+	"goqb/runtime/launch"
+	"goqb/runtime/loader"
 	"goqb/vm"
 )
 
@@ -55,30 +52,49 @@ func runCmd(args []string) int {
 	if !ok {
 		return 1
 	}
+	vm.DefaultLoader = loader.New(inc, filepath.Dir(fs.Arg(0)))
 	command := strings.Join(fs.Args()[1:], " ")
+	return launch.Run(prog, command, launch.Options{Plain: *plain, NoWait: *noWait, Window: *win, Title: "goqb - " + filepath.Base(fs.Arg(0))})
+}
 
-	tty := term.IsTerminal(int(os.Stdout.Fd())) && term.IsTerminal(int(os.Stdin.Fd()))
-	var err error
-	if *win {
-		err = window.Run(prog, command, "goqb - "+filepath.Base(fs.Arg(0)))
-	} else if *plain || !tty {
-		con := vm.NewPlainConsole(os.Stdin, os.Stdout)
-		con.EchoInput = !term.IsTerminal(int(os.Stdin.Fd()))
-		m := vm.New(prog, con)
-		m.Command = command
-		m.Sound = sound.Device()
-		err = m.Run()
-	} else {
-		err = termrun.Run(prog, command, !*noWait)
+// buildCmd genera un ejecutable independiente: goqbc build [-o salida] [-target os/arch] programa.bas
+func buildCmd(args []string) int {
+	fs := flag.NewFlagSet("build", flag.ExitOnError)
+	var inc multiFlag
+	fs.Var(&inc, "I", "directorio adicional para $INCLUDE (repetible)")
+	out := fs.String("o", "", "ejecutable de salida (por defecto, el nombre del programa)")
+	target := fs.String("target", "", "sistema/arquitectura de destino, por ejemplo windows/amd64")
+	stub := fs.String("stub", "", "runtime a usar como base (por defecto, goqbrt-os-arch)")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		usage()
+		return 2
 	}
+	t, err := bundle.ParseTarget(*target)
 	if err != nil {
-		var re *vm.RuntimeError
-		if errors.As(err, &re) && errors.Is(re.Err, vm.ErrBreak) {
-			fmt.Fprintf(os.Stderr, "%s:%d: Break\n", re.File, re.Line)
-			return 130
-		}
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "goqbc:", err)
+		return 2
+	}
+	prog, ok := build(fs.Arg(0), inc)
+	if !ok {
 		return 1
 	}
+	if *stub == "" {
+		if *stub, err = bundle.FindStub(t); err != nil {
+			fmt.Fprintln(os.Stderr, "goqbc:", err)
+			return 1
+		}
+	}
+	dst := *out
+	if dst == "" {
+		base := filepath.Base(fs.Arg(0))
+		dst = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	dst = t.ExeName(dst)
+	if err := bundle.Write(*stub, dst, prog); err != nil {
+		fmt.Fprintln(os.Stderr, "goqbc:", err)
+		return 1
+	}
+	fmt.Printf("%s (%s)\n", dst, t)
 	return 0
 }

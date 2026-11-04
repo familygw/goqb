@@ -14,6 +14,14 @@ func (c *Compiler) stmts(list []ast.Stmt) {
 	}
 }
 
+// markEnd marca el cierre de un bloque (NEXT, LOOP, WEND, END SUB) como
+// sentencia, para que el depurador se detenga ahí como en QB.
+func (c *Compiler) markEnd(pos ast.Pos) {
+	if pos.Line > 0 {
+		c.mark(pos)
+	}
+}
+
 // mark registra el inicio de una sentencia (para errores, RESUME y ERL).
 func (c *Compiler) mark(pos ast.Pos) {
 	c.prog.Stmts = append(c.prog.Stmts, vm.StmtInfo{PC: c.here(), File: c.file, Line: pos.Line, Col: pos.Col, ERL: c.erl})
@@ -107,6 +115,7 @@ func (c *Compiler) stmt1(st ast.Stmt) {
 		c.cond(s.Cond)
 		exit := c.emit(vm.OpJmpF, 0, 0)
 		c.stmts(s.Body)
+		c.markEnd(s.WendPos)
 		c.emit(vm.OpJmp, int32(top), 0)
 		c.patchA(exit, c.here())
 	case *ast.Jump:
@@ -335,7 +344,34 @@ func (c *Compiler) simple(s *ast.Simple) {
 		c.stmt("NOP", args()) // línea de teclas de función y TRON: sin efecto en la terminal
 	case "OPTION BASE":
 		c.sc.optBase = int(s.Args[0].(*ast.NumberLit).Int)
-	case "OUT", "WAIT", "IOCTL", "BLOAD", "BSAVE", "CHAIN":
+	case "CHAIN":
+		if len(s.Args) != 1 || s.Args[0] == nil {
+			c.errAt(s.P, "Expected: expression")
+			return
+		}
+		c.strArg(s.Args[0])
+		c.stmt("CHAIN", 1)
+	case "OUT", "WAIT":
+		if len(s.Args) < 2 || s.Args[0] == nil || s.Args[1] == nil {
+			c.errAt(s.P, "Argument-count mismatch")
+			return
+		}
+		c.stmt(s.Name, args())
+	case "BSAVE", "BLOAD":
+		if len(s.Args) == 0 || s.Args[0] == nil || s.Name == "BSAVE" && (len(s.Args) != 3 || s.Args[1] == nil || s.Args[2] == nil) {
+			c.errAt(s.P, "Argument-count mismatch")
+			return
+		}
+		c.strArg(s.Args[0])
+		for _, a := range s.Args[1:] {
+			if a == nil {
+				c.pushNone()
+			} else {
+				c.numArg(a)
+			}
+		}
+		c.stmt(s.Name, len(s.Args))
+	case "IOCTL":
 		c.unsupported(s.Name)
 	case "ERASE":
 		for _, a := range s.Args {
@@ -390,12 +426,11 @@ func (c *Compiler) simple(s *ast.Simple) {
 func (c *Compiler) callStmt(s *ast.CallStmt) {
 	key := baseName(s.Name)
 	p := c.procs[key]
+	if up := strings.ToUpper(s.Name); (p == nil || p.Def == nil) && (up == "ABSOLUTE" || up == "INTERRUPT" || up == "INTERRUPTX") {
+		c.machineCall(up, s)
+		return
+	}
 	if p == nil {
-		up := strings.ToUpper(s.Name)
-		if up == "ABSOLUTE" || up == "INTERRUPT" || up == "INTERRUPTX" {
-			c.unsupported("CALL " + up)
-			return
-		}
 		c.errAt(s.P, "Subprogram not defined: "+s.Name)
 		return
 	}
@@ -404,6 +439,45 @@ func (c *Compiler) callStmt(s *ast.CallStmt) {
 		return
 	}
 	c.callProc(p, s.Args, s.P, false)
+}
+
+// machineCall compila CALL ABSOLUTE([args,] offset) y CALL INTERRUPT[X](n, inregs, outregs).
+func (c *Compiler) machineCall(name string, s *ast.CallStmt) {
+	for _, a := range s.Args {
+		if a == nil {
+			c.errAt(s.P, "Syntax error")
+			return
+		}
+	}
+	if name == "ABSOLUTE" {
+		if len(s.Args) == 0 {
+			c.errAt(s.P, "Argument-count mismatch")
+			return
+		}
+		for _, a := range s.Args[:len(s.Args)-1] {
+			if c.isLValue(a) {
+				c.addr(a)
+			} else {
+				c.expr(a)
+				c.emit(vm.OpTemp, 0, 0)
+			}
+		}
+		c.numArg(s.Args[len(s.Args)-1])
+		c.stmt("ABSOLUTE", len(s.Args))
+		return
+	}
+	if len(s.Args) != 3 {
+		c.errAt(s.P, "Argument-count mismatch")
+		return
+	}
+	c.numArg(s.Args[0])
+	for _, a := range s.Args[1:] {
+		t, ok := c.addr(a)
+		if ok && t.K != vm.KRecord {
+			c.errAt(a.Position(), "Parameter type mismatch")
+		}
+	}
+	c.stmt("INTERRUPT", 3)
 }
 
 // ------------------------------------------------------------- PRINT / WRITE / INPUT
@@ -667,6 +741,7 @@ func (c *Compiler) forStmt(s *ast.For) {
 	exit := c.emit(vm.OpJmpF, 0, 0)
 	c.loops = append(c.loops, loopCtx{kind: "FOR"})
 	c.stmts(s.Body)
+	c.markEnd(s.NextPos)
 	c.loadSym(sym)
 	c.loadSym(step)
 	c.emit(vm.OpAdd, 0, 0)
@@ -690,6 +765,7 @@ func (c *Compiler) doStmt(s *ast.DoLoop) {
 	}
 	c.loops = append(c.loops, loopCtx{kind: "DO"})
 	c.stmts(s.Body)
+	c.markEnd(s.LoopPos)
 	if s.PostCond != nil {
 		c.cond(s.PostCond)
 		if s.PostUntil {

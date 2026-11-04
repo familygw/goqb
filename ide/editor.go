@@ -32,6 +32,8 @@ type Editor struct {
 	clipColumn *bool
 	// Colorize, si no es nil, devuelve un estilo por runa de una línea.
 	Colorize func(line string) []tcell.Style
+	// IsBreak, si no es nil, indica las líneas con breakpoint.
+	IsBreak func(row int) bool
 }
 
 func (e *Editor) setView(v *View) {
@@ -678,6 +680,10 @@ func (e *Editor) Draw(c canvas, area rect, focused bool, curStmt int) (int, int)
 	for y := 0; y < area.h; y++ {
 		row := v.Top + y
 		base := stEditor
+		isBreak := e.IsBreak != nil && row < len(v.Lines) && e.IsBreak(row)
+		if isBreak {
+			base = stBreak
+		}
 		if row == curStmt {
 			base = stCurStmt.Reverse(true)
 		}
@@ -685,7 +691,7 @@ func (e *Editor) Draw(c canvas, area rect, focused bool, curStmt int) (int, int)
 		var styles []tcell.Style
 		if row < len(v.Lines) {
 			l = []rune(v.Lines[row])
-			if e.Colorize != nil && row != curStmt {
+			if e.Colorize != nil && row != curStmt && !isBreak {
 				styles = e.Colorize(v.Lines[row])
 			}
 		}

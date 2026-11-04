@@ -238,38 +238,6 @@ func init() {
 		return nil
 	})
 	regStmt("NOP", func(m *VM, a []Value) error { return nil }) // KEY ON/OFF, TRON...: sin efecto en la terminal
-	regStmt("POKE", func(m *VM, a []Value) error {
-		off, err := intArg(a[0])
-		if err != nil || off < 0 || off > 0xFFFF {
-			return ErrIllegalCall
-		}
-		v, err := intArg(a[1])
-		if err != nil || v < 0 || v > 255 {
-			return ErrIllegalCall
-		}
-		if m.defSeg == 0xB800 { // memoria de video de texto
-			w, h := m.Con.Size()
-			r, c := off/(2*w)+1, (off%(2*w))/2+1
-			if r <= h {
-				ch, attr := m.Con.CharAt(r, c)
-				if off%2 == 0 {
-					ch = byte(v)
-				} else {
-					attr = byte(v)
-				}
-				m.Con.PutChar(r, c, ch, attr)
-			}
-		}
-		return nil
-	})
-	regStmt("DEF_SEG", func(m *VM, a []Value) error {
-		seg, err := optInt(a, 0, 0)
-		if err != nil {
-			return err
-		}
-		m.defSeg = seg & 0xFFFF
-		return nil
-	})
 	regStmt("SLEEP", func(m *VM, a []Value) error {
 		secs, err := optInt(a, 0, 0)
 		if err != nil {
@@ -560,7 +528,7 @@ func init() {
 	regStmt("RUN", func(m *VM, a []Value) error {
 		if len(a) > 0 && !isNone(a[0]) {
 			if a[0].K == KString {
-				return ErrAdvancedFeature // RUN "archivo": fase 7
+				return m.chain(a[0].S, false)
 			}
 			pc, _ := intArg(a[0])
 			m.Reset()

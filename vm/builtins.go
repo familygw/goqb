@@ -268,6 +268,11 @@ func init() {
 		if m.stop.Load() {
 			return none, errStopped
 		}
+		if m.mem != nil && m.mem.pending != "" { // tecla leída por INT 16h
+			k := m.mem.pending
+			m.mem.pending = ""
+			return Str(k), nil
+		}
 		return Str(m.Con.InKey()), nil
 	}})
 	reg(Builtin{Name: "INPUT$", Args: "n|f", Ret: KString, Fn: func(m *VM, a []Value) (Value, error) {
@@ -332,24 +337,6 @@ func init() {
 			return Int(int64(attr)), nil
 		}
 		return Int(int64(ch)), nil
-	}})
-	reg(Builtin{Name: "PEEK", Args: "n", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) {
-		off, err := intArg(a[0])
-		if err != nil || off < 0 || off > 0xFFFF {
-			return none, ErrIllegalCall
-		}
-		if m.defSeg == 0xB800 {
-			w, h := m.Con.Size()
-			r, c := off/(2*w)+1, (off%(2*w))/2+1
-			if r <= h {
-				ch, attr := m.Con.CharAt(r, c)
-				if off%2 == 0 {
-					return Int(int64(ch)), nil
-				}
-				return Int(int64(attr)), nil
-			}
-		}
-		return Int(0), nil
 	}})
 	reg(Builtin{Name: "FRE", Args: "x", Ret: KLong, Fn: func(m *VM, a []Value) (Value, error) { return Long(400000), nil }})
 	reg(Builtin{Name: "ERR", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) { return Int(int64(m.errCode)), nil }})
@@ -431,13 +418,9 @@ func init() {
 	for _, n := range []string{"PEN", "STICK", "STRIG", "PLAY", "LPOS"} {
 		reg(Builtin{Name: n, Args: "n", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) { return Int(0), nil }})
 	}
-	for _, n := range []string{"VARPTR", "VARSEG", "SADD"} {
-		reg(Builtin{Name: n, Args: "v", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) { return Int(0), nil }})
-	}
 	reg(Builtin{Name: "SETMEM", Args: "n", Ret: KLong, Fn: func(m *VM, a []Value) (Value, error) { return Long(400000), nil }})
 	reg(Builtin{Name: "ERDEV", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) { return Int(0), nil }})
 	reg(Builtin{Name: "ERDEV$", Ret: KString, Fn: func(m *VM, a []Value) (Value, error) { return Str(""), nil }})
-	reg(Builtin{Name: "INP", Args: "n", Ret: KInt, Fn: func(m *VM, a []Value) (Value, error) { return none, ErrAdvancedFeature }})
 	reg(Builtin{Name: "IOCTL$", Args: "f", Ret: KString, Fn: func(m *VM, a []Value) (Value, error) { return none, ErrAdvancedFeature }})
 }
 

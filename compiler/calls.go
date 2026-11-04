@@ -257,6 +257,8 @@ func (c *Compiler) defFn(d *ast.DefFn) {
 	c.resolveLabels(sc)
 	c.sc = saveSc
 	vp.Locals = sc.locals
+	vp.Start, vp.End = vp.Entry, c.here()
+	c.procScopes[p.Index] = sc
 	c.patchA(jmp, c.here())
 	// Registrar después de compilar el cuerpo: DEF FN no es recursivo.
 	c.procs[key] = p

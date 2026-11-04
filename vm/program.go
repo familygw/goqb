@@ -64,7 +64,8 @@ const (
 	OpStop        // STOP
 	OpUnsupported // error 73 (A = índice del nombre en Consts)
 	OpError       // ERROR n: pop n
-	OpEvt         // inicio de sentencia: revisa eventos atrapados (ON TIMER/KEY/PLAY)
+	OpEvt         // inicio de sentencia: revisa eventos atrapados (ON TIMER/KEY/PLAY) y el depurador
+	OpEvalDone    // fin del código de una expresión del depurador o de la ventana Immediate
 )
 
 // Flags de OpDim.
@@ -101,6 +102,8 @@ type Proc struct {
 	File    int
 	Line    int
 	EndLine int
+	// Start y End delimitan el código del procedimiento (para el depurador).
+	Start, End int
 }
 
 // DataItem es un elemento de DATA.
@@ -122,6 +125,10 @@ type Program struct {
 	Entry   int
 	// GlobalNames ayuda a la ventana Immediate y al depurador.
 	GlobalNames map[string]int
+	// CommonSlots: slots globales del COMMON sin nombre, en orden (para CHAIN).
+	CommonSlots []int
+
+	stmtStart []bool
 }
 
 // StmtAt devuelve el índice de la sentencia que contiene pc (o -1).

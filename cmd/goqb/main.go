@@ -8,9 +8,13 @@ import (
 	"os"
 
 	"goqb/ide"
+	"goqb/runtime/launch"
 )
 
 func main() {
+	if code, ok := launch.Embedded(); ok { // ejecutable generado con Make EXE
+		os.Exit(code)
+	}
 	path := ""
 	if len(os.Args) > 1 {
 		switch os.Args[1] {

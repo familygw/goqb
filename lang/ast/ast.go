@@ -274,6 +274,7 @@ type (
 		From, To, Step Expr
 		Body           []Stmt
 		NextVar        Expr // variable escrita en NEXT, si la hay
+		NextPos        Pos  // posición del NEXT (el depurador se detiene ahí)
 	}
 
 	// DoLoop: DO [WHILE|UNTIL c] ... LOOP [WHILE|UNTIL c]
@@ -284,12 +285,14 @@ type (
 		PostCond  Expr
 		PostUntil bool
 		Body      []Stmt
+		LoopPos   Pos
 	}
 
 	While struct {
-		P    Pos
-		Cond Expr
-		Body []Stmt
+		P       Pos
+		Cond    Expr
+		Body    []Stmt
+		WendPos Pos
 	}
 
 	// Jump es GOTO / GOSUB / RETURN [label] / RESTORE [label].

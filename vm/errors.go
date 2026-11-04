@@ -48,6 +48,7 @@ var (
 	ErrPathNotFound    = &Error{76}
 	errStopped         = errors.New("stopped")
 	errEnd             = errors.New("end")
+	errPaused          = errors.New("paused")
 )
 
 var messages = map[int]string{

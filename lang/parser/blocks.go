@@ -188,6 +188,7 @@ func (p *Parser) parseFor() ast.Stmt {
 	if !ok {
 		return s
 	}
+	s.NextPos = p.cur().Pos
 	if p.pendingNext > 0 { // cerrado por un NEXT j, i anterior
 		p.pendingNext--
 	} else {
@@ -225,7 +226,7 @@ func (p *Parser) parseDo() ast.Stmt {
 	if !ok {
 		return s
 	}
-	p.expect("LOOP")
+	s.LoopPos = p.expect("LOOP").Pos
 	if p.is("WHILE") || p.is("UNTIL") {
 		if s.PreCond != nil {
 			p.fail("Expected: end-of-statement")
@@ -243,7 +244,7 @@ func (p *Parser) parseWhile() ast.Stmt {
 	body, ok := p.parseBody("WHILE", t.Pos, "WHILE without WEND")
 	s.Body = body
 	if ok {
-		p.expect("WEND")
+		s.WendPos = p.expect("WEND").Pos
 	}
 	return s
 }

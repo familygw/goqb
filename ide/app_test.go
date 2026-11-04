@@ -267,3 +267,78 @@ func TestIDEGraphicsBlocks(t *testing.T) {
 	h.wait()
 	h.expect("Immediate")
 }
+
+func TestIDEDebugger(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/dbg.bas"
+	src := "DECLARE SUB Doble (n)\r\nFOR i = 1 TO 3\r\n    Doble i\r\nNEXT\r\nPRINT \"fin\"; total\r\nSUB Doble (n)\r\n    SHARED total\r\n    total = total + n * 2\r\nEND SUB\r\n"
+	os.WriteFile(path, []byte(src), 0o644)
+	h := newHarness(t, 100, 30, path)
+	defer h.close()
+	a := h.app
+
+	// breakpoint en "total = total + n * 2" (vista del SUB, línea 2)
+	vi := a.doc.FindView("Doble")
+	a.switchView(vi)
+	a.doc.Views[vi].Row = 2
+	h.key(tcell.KeyF9, 0, 0)
+	h.wait()
+	if !a.isBreak(2) {
+		t.Fatal("F9 no puso el breakpoint")
+	}
+	h.key(tcell.KeyF5, 0, 0)
+	time.Sleep(300 * time.Millisecond)
+	h.expect("Detenido")
+	if a.curStmt.View != vi || a.curStmt.Line != 2 {
+		t.Fatalf("sentencia actual: %+v", a.curStmt)
+	}
+	a.addWatch("n", false)
+	h.key(tcell.KeyEsc, 0, 0) // forzar un redibujo
+	h.wait()
+	h.expect("Doble n:  1")
+
+	// F8: paso a END SUB; F8 otra vez: vuelve al NEXT del módulo
+	h.key(tcell.KeyF8, 0, 0)
+	time.Sleep(200 * time.Millisecond)
+	if a.curStmt.Line != 3 {
+		t.Errorf("después de F8: %+v", a.curStmt)
+	}
+	h.key(tcell.KeyF8, 0, 0)
+	time.Sleep(200 * time.Millisecond)
+	if a.curStmt.View != 0 || a.curStmt.Line != 3 { // NEXT (líneas desde 0)
+		t.Errorf("después del segundo F8: %+v", a.curStmt)
+	}
+	h.expect("<Not watchable>")
+
+	// Immediate en el programa detenido, y se puede seguir
+	h.key(tcell.KeyF6, 0, 0)
+	h.typeText("total = total + 100\n")
+	time.Sleep(200 * time.Millisecond)
+	if !a.paused() {
+		t.Fatal("después de Immediate debería poder continuar")
+	}
+	h.key(tcell.KeyF6, 0, 0)
+	h.wait()
+	a.clearBreakpoints()
+	h.key(tcell.KeyF5, 0, 0)
+	time.Sleep(300 * time.Millisecond)
+	h.expect("fin 112")
+}
+
+func TestIDEKeywordHelp(t *testing.T) {
+	h := newHarness(t, 100, 30, "")
+	h.typeText("PRINT \"hola\"")
+	h.key(tcell.KeyHome, 0, 0)
+	h.key(tcell.KeyF1, 0, 0)
+	h.wait()
+	if txt := h.text(); !strings.Contains(txt, "Escribe en pantalla") {
+		t.Errorf("no aparece la ayuda de PRINT:\n%s", txt)
+	}
+	h.key(tcell.KeyEscape, 0, 0)
+	h.key(tcell.KeyEnd, 0, 0)
+	h.key(tcell.KeyF1, 0, 0) // sobre el string: ayuda de teclado
+	h.wait()
+	if txt := h.text(); !strings.Contains(txt, "Shift+F2") {
+		t.Errorf("no aparece la ayuda de teclado:\n%s", txt)
+	}
+}

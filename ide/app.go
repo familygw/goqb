@@ -2,6 +2,7 @@ package ide
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"goqb/compiler"
+	"goqb/runtime/loader"
 	"goqb/runtime/screen"
 	"goqb/runtime/termrun"
 	"goqb/vm"
@@ -34,6 +36,7 @@ type layout struct {
 	hasImm   bool
 	panel    rect // panel lateral de SUBs (contenido)
 	hasPanel bool
+	watch    rect // ventana de watches (alto 0 si no hay)
 }
 
 // App es el IDE.
@@ -61,6 +64,7 @@ type App struct {
 	syntaxCheck bool
 	lineNumbers bool
 	autoFormat  bool
+	includePath []string // directorios para $INCLUDE (config.json)
 	lastFind    string
 	command     string
 
@@ -77,7 +81,16 @@ type App struct {
 	fromImm     bool
 	curStmt     Loc // sentencia donde se detuvo (View -1: ninguna)
 
-	pres       *termrun.Presenter
+	pres *termrun.Presenter
+
+	breaks     map[bpKey]bool
+	watches    []*watch
+	historyOn  bool
+	tempBreak  bpKey
+	tempHad    bool
+	runStart   time.Time
+	outShown   bool
+	immBreak   bool // la sentencia Immediate se ejecuta sobre un programa detenido
 	lastClick  time.Time
 	lastClickX int
 	lastClickY int
@@ -88,6 +101,13 @@ type App struct {
 func New(path string) (*App, error) {
 	a := &App{syntaxCheck: true, autoFormat: true, lineNumbers: true, vmDone: make(chan error, 1), curStmt: Loc{View: -1}}
 	a.doc = NewDocument()
+	vm.DefaultLoader = func(name string) (*vm.Program, error) { // CHAIN y RUN "archivo"
+		dir := ""
+		if a.doc.Path != "" {
+			dir = filepath.Dir(a.doc.Path)
+		}
+		return loader.New(a.includePath, dir)(name)
+	}
 	if path != "" {
 		d, err := LoadDocument(path)
 		if err != nil {
@@ -100,11 +120,13 @@ func New(path string) (*App, error) {
 	a.imv = &View{Lines: []string{""}}
 	a.ed.clipboard = &a.clip
 	a.ed.clipColumn = &a.clipColumn
-	a.ed.Colorize = highlight
+	a.loadConfig()
 	a.imEd.clipboard = &a.clip
 	a.imEd.clipColumn = &a.clipColumn
 	a.ed.OnLineExit = a.lineExit
 	a.ed.OnChange = func() { a.doc.Touch(); a.curStmt = Loc{View: -1} }
+	a.breaks = map[bpKey]bool{}
+	a.ed.IsBreak = a.isBreak
 	a.ed.setView(a.doc.Views[0])
 	a.imEd.setView(a.imv)
 	a.buildMenus()
@@ -161,7 +183,9 @@ func (a *App) RunOn(scr tcell.Screen) error {
 			a.draw()
 		case <-tick.C:
 			if a.mode == modeRun {
-				if v := a.out.Version(); v != lastOut {
+				// la pantalla de salida aparece recién si la ejecución dura algo
+				// (al depurar paso a paso no parpadea)
+				if v := a.out.Version(); v != lastOut || !a.outShown && time.Since(a.runStart) > outDelay {
 					lastOut = v
 					a.draw()
 				}
@@ -200,8 +224,14 @@ func (a *App) computeLayout() {
 		l.imm = rect{1, h - 3, ew - 2, 2}
 		bottom = h - 5
 	}
-	l.frame = rect{0, 1, ew, bottom}
-	l.edit = rect{1, 2, ew - 2, bottom - 2}
+	// ventana de watches arriba del editor, como en QB
+	wy := min(len(a.watches), maxWatches)
+	if bottom-wy < 4 {
+		wy = 0
+	}
+	l.watch = rect{0, 1, ew, wy}
+	l.frame = rect{0, 1 + wy, ew, bottom - wy}
+	l.edit = rect{1, 2 + wy, ew - 2, bottom - wy - 2}
 	a.menu.compact = l.compact
 	a.lay = l
 }
@@ -219,7 +249,10 @@ func (a *App) draw() {
 		scr.Show()
 		return
 	}
-	if a.mode != modeEdit {
+	if a.mode == modeRun && !a.outShown && time.Since(a.runStart) < outDelay {
+		// todavía en el editor (paso del depurador)
+	} else if a.mode != modeEdit {
+		a.outShown = true
 		a.drawOutput()
 		return
 	}
@@ -227,6 +260,9 @@ func (a *App) draw() {
 		a.pres.Reset() // borrar imágenes del modo gráfico al volver al editor
 	}
 	c.fill(rect{0, 0, l.w, l.h}, ' ', stDesk)
+	if l.watch.h > 0 {
+		a.drawWatches()
+	}
 	cx, cy := a.drawEditorWindow()
 	if l.hasImm {
 		if x, y := a.drawImmediate(); x >= 0 {
@@ -522,11 +558,41 @@ func (a *App) key(e *tcell.EventKey) {
 	ctrl := e.Modifiers()&tcell.ModCtrl != 0
 	switch e.Key() {
 	case tcell.KeyF10:
+		if a.paused() || ctrl { // F10 = paso por procedimiento mientras se depura
+			a.debugRun(vm.DebugStepOver)
+			return
+		}
 		a.leaveLine()
 		a.menu.Activate()
 		return
+	case tcell.KeyF8:
+		if shift {
+			a.debugRun(vm.DebugStepOut)
+		} else {
+			a.debugRun(vm.DebugStepInto)
+		}
+		return
+	case tcell.KeyF20: // Shift+F8
+		a.debugRun(vm.DebugStepOut)
+		return
+	case tcell.KeyF34: // Ctrl+F10
+		a.debugRun(vm.DebugStepOver)
+		return
+	case tcell.KeyF7:
+		a.runToCursor()
+		return
+	case tcell.KeyF9:
+		if shift {
+			a.instantWatch()
+		} else {
+			a.toggleBreakpoint()
+		}
+		return
+	case tcell.KeyF21: // Shift+F9
+		a.instantWatch()
+		return
 	case tcell.KeyF1:
-		a.help()
+		a.contextHelp()
 		return
 	case tcell.KeyF2:
 		switch {
@@ -714,4 +780,20 @@ func (a *App) popDialog(d *Dialog) {
 // message muestra un aviso con OK.
 func (a *App) message(title string, lines ...string) {
 	a.pushDialog(&Dialog{Title: title, Lines: lines, Buttons: []string{"OK"}})
+}
+
+// outDelay: tiempo que debe correr el programa antes de mostrar la pantalla de salida.
+const outDelay = 150 * time.Millisecond
+
+func (a *App) drawWatches() {
+	r := a.lay.watch
+	for i := 0; i < r.h && i < len(a.watches); i++ {
+		w := a.watches[i]
+		a.c.hline(r.x, r.y+i, r.w, ' ', stWatch)
+		var b strings.Builder
+		b.WriteString(watchLabel(w))
+		b.WriteString(": ")
+		b.WriteString(w.value)
+		a.c.text(r.x+1, r.y+i, b.String(), stWatch, r.w-2)
+	}
 }

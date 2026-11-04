@@ -501,6 +501,23 @@ func (s *Screen) set(x, y, c int) {
 
 func (s *Screen) get(x, y int) int { return int(s.pix()[y*s.M.W+x]) }
 
+// Pixel lee un pixel de la página activa sin VIEW ni WINDOW (memoria de video).
+func (s *Screen) Pixel(x, y int) int {
+	if x < 0 || y < 0 || x >= s.M.W || y >= s.M.H {
+		return 0
+	}
+	return s.get(x, y)
+}
+
+// SetPixel escribe un pixel de la página activa sin VIEW ni WINDOW.
+func (s *Screen) SetPixel(x, y, c int) {
+	if x < 0 || y < 0 || x >= s.M.W || y >= s.M.H {
+		return
+	}
+	s.pix()[y*s.M.W+x] = uint8(c)
+	s.touch()
+}
+
 func (s *Screen) color(c int) int {
 	if c < 0 {
 		return s.fg

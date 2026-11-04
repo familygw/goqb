@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"goqb/lang/ast"
+	"goqb/lang/parser"
 	"goqb/lang/source"
 	"goqb/vm"
 )
@@ -171,6 +172,7 @@ type Compiler struct {
 	loops        []loopCtx
 	pendingCalls []pendingCall
 	commonCount  map[string]int
+	procScopes   map[int]*scope // ámbito de cada vm.Proc (para el depurador)
 }
 
 // Compile compila un programa (uno o varios módulos).
@@ -183,6 +185,7 @@ func Compile(prog *source.Program) (*vm.Program, *Compiler, []source.Diag) {
 		files:  map[string]int{},
 
 		commonCount: map[string]int{},
+		procScopes:  map[int]*scope{},
 	}
 	c.noneIdx = c.constIdx(vm.Value{})
 	for _, f := range prog.Modules {
@@ -232,6 +235,7 @@ func Compile(prog *source.Program) (*vm.Program, *Compiler, []source.Diag) {
 		c.resolveLabels(m.scope)
 	}
 	sortStmts(c.prog.Stmts)
+	c.prog.CommonSlots = c.common[""]
 	return c.prog, c, c.diags
 }
 
@@ -668,13 +672,16 @@ func (c *Compiler) compileProc(p *procInfo) {
 	entry := c.emit(vm.OpJmp, 0, 0)
 	body := c.here()
 	c.stmts(def.Body)
+	c.markEnd(def.EndPos)
 	c.emit(vm.OpRet, 0, 0)
 	pro := c.here()
 	c.patchA(entry, pro)
 	c.prologue(sc)
 	c.emit(vm.OpJmp, int32(body), 0)
 	vp.Entry = entry
+	vp.Start, vp.End = entry, c.here()
 	vp.Locals = sc.locals
+	c.procScopes[p.Index] = sc
 	c.resolveLabels(sc)
 }
 
@@ -713,6 +720,68 @@ func (c *Compiler) Immediate(stmts []ast.Stmt) (int, []source.Diag) {
 	}
 	c.pendingCalls = nil
 	c.resolveLabels(m.scope)
+	sortStmts(c.prog.Stmts)
+	return entry, c.diags
+}
+
+// scopeFor devuelve el ámbito de un procedimiento (-1: módulo principal).
+func (c *Compiler) scopeFor(proc int) (*scope, *modState) {
+	if sc, ok := c.procScopes[proc]; ok && proc >= 0 {
+		m := c.mods[0]
+		if sc.proc != nil && sc.proc.mod != nil {
+			m = sc.proc.mod
+		}
+		return sc, m
+	}
+	return c.mods[0].scope, c.mods[0]
+}
+
+// syncLocals actualiza los prototipos de locales del procedimiento (la
+// ventana Immediate o un watch pueden haber creado variables nuevas).
+func (c *Compiler) syncLocals(proc int, sc *scope) {
+	if proc >= 0 && proc < len(c.prog.Procs) {
+		c.prog.Procs[proc].Locals = sc.locals
+	}
+}
+
+// CompileEval compila una expresión para evaluarla en el ámbito de proc
+// (-1 = nivel de módulo) con VM.Eval. Devuelve el pc de entrada.
+func (c *Compiler) CompileEval(src string, proc int) (int, []source.Diag) {
+	e, errs := parser.ParseExpr(src)
+	c.diags = nil
+	if len(errs) > 0 {
+		return 0, []source.Diag{{File: "Watch", Pos: errs[0].Pos, Msg: errs[0].Msg}}
+	}
+	sc, m := c.scopeFor(proc)
+	c.mod, c.sc, c.file, c.erl = m, sc, c.fileIdx("Watch"), 0
+	entry := c.here()
+	c.expr(e)
+	c.emit(vm.OpEvalDone, 0, 0)
+	c.syncLocals(proc, sc)
+	return entry, c.diags
+}
+
+// ImmediateIn compila sentencias de la ventana Immediate en el ámbito de
+// proc, para ejecutarlas con VM.Eval sobre el frame detenido (y poder seguir).
+func (c *Compiler) ImmediateIn(stmts []ast.Stmt, proc int) (int, []source.Diag) {
+	c.diags = nil
+	sc, m := c.scopeFor(proc)
+	c.mod, c.sc, c.file, c.erl = m, sc, c.fileIdx("Immediate"), 0
+	for _, s := range stmts {
+		switch s.(type) {
+		case *ast.Label, *ast.Proc, *ast.DefFn, *ast.TypeDecl, *ast.Data, *ast.Declare, *ast.Jump, *ast.OnJump:
+			c.errAt(s.Position(), "Illegal in direct mode")
+			return 0, c.diags
+		}
+	}
+	entry := c.here()
+	c.stmts(stmts)
+	c.emit(vm.OpEvalDone, 0, 0)
+	for _, pc := range c.pendingCalls {
+		c.prog.Code[pc.at].A = int32(pc.p.Index)
+	}
+	c.pendingCalls = nil
+	c.syncLocals(proc, sc)
 	sortStmts(c.prog.Stmts)
 	return entry, c.diags
 }

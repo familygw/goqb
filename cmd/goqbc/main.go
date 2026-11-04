@@ -3,6 +3,8 @@
 //	goqbc check  [-I dir] archivo.bas|proyecto.mak ...   verifica sintaxis y estructura
 //	goqbc tokens archivo.bas                             muestra los tokens
 //	goqbc ast    archivo.bas                             muestra el árbol sintáctico
+//	goqbc run    archivo.bas                             ejecuta
+//	goqbc build  [-o salida] archivo.bas                 genera un ejecutable (Make EXE)
 package main
 
 import (
@@ -18,6 +20,7 @@ import (
 	"goqb/lang/parser"
 	"goqb/lang/source"
 	"goqb/lang/token"
+	"goqb/runtime/launch"
 )
 
 const version = "0.3.0"
@@ -28,6 +31,7 @@ func usage() {
 Uso:
   goqbc check  [-I dir] archivo.bas|proyecto.mak ...
   goqbc run    [-I dir] [-plain] [-nowait] archivo.bas|proyecto.mak [COMMAND$]
+  goqbc build  [-I dir] [-o salida] [-target os/arch] [-stub runtime] archivo.bas|proyecto.mak
   goqbc tokens archivo.bas
   goqbc ast    archivo.bas
   goqbc version
@@ -35,6 +39,9 @@ Uso:
 }
 
 func main() {
+	if code, ok := launch.Embedded(); ok { // ejecutable generado con build
+		os.Exit(code)
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -45,6 +52,8 @@ func main() {
 		os.Exit(runCheck(args))
 	case "run":
 		os.Exit(runCmd(args))
+	case "build":
+		os.Exit(buildCmd(args))
 	case "tokens":
 		os.Exit(withFile(args, func(name string, src []byte) int {
 			for _, t := range lexer.Tokenize(src) {
