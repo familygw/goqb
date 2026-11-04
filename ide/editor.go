@@ -311,7 +311,8 @@ func (e *Editor) enter() {
 	cur := e.line(v.Row)
 	col := min(v.Col, len(cur))
 	head, tail := cur[:col], cur[col:]
-	indent := len(cur) - len(strings.TrimLeft(string(cur), " "))
+	// Las columnas y cur cuentan runas, no bytes UTF-8 (p. ej. bordes CP437).
+	indent := len(cur) - len([]rune(strings.TrimLeft(string(cur), " ")))
 	if strings.TrimSpace(string(cur)) == "" {
 		indent = v.Col
 	}

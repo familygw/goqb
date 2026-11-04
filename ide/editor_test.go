@@ -2,6 +2,7 @@ package ide
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gdamore/tcell/v2"
@@ -16,6 +17,36 @@ func editingTest(lines ...string) *Editor {
 
 func arrow(e *Editor, key tcell.Key, mods tcell.ModMask) {
 	e.HandleKey(tcell.NewEventKey(key, 0, mods))
+}
+
+func TestEditorCommentEndEnter(t *testing.T) {
+	for _, tc := range []struct {
+		name, line string
+		indent     int
+	}{
+		{"box CP437", `    PRINT "┌"; STRING$(BoxWidth - 2, "─"); "┐";`, 4},
+		{"acentos", `    PRINT "Información: año, día, crédito"`, 4},
+		{"sin sangría", `PRINT "└────┘"`, 0},
+		{"ASCII", `    PRINT "Box"`, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := editingTest(tc.line, "END SUB")
+			// Comentar al inicio del código, Fn+derecha (End), Enter.
+			arrow(e, tcell.KeyHome, 0)
+			e.typeRune('\'')
+			commented := e.v.Lines[0]
+			arrow(e, tcell.KeyEnd, 0)
+			arrow(e, tcell.KeyEnter, 0)
+			want := []string{commented, strings.Repeat(" ", tc.indent), "END SUB"}
+			if !reflect.DeepEqual(e.v.Lines, want) || e.v.Row != 1 || e.v.Col != tc.indent {
+				t.Fatalf("Enter: %q, cursor %d:%d; esperado %q", e.v.Lines, e.v.Row, e.v.Col, want)
+			}
+			e.undo()
+			if !reflect.DeepEqual(e.v.Lines, []string{commented, "END SUB"}) || e.v.Col != len([]rune(commented)) {
+				t.Fatalf("undo Enter: %q, columna %d", e.v.Lines, e.v.Col)
+			}
+		})
+	}
 }
 
 func TestEditorShiftSelection(t *testing.T) {
