@@ -1,0 +1,17 @@
+Hola 1 -2  3.5  .3333333  .3333333333333333  1024  3  1 
+ 1E+07  12345678  .001  1E-04  1E+07 
+ 25  16  9  4  1 
+Quick         BASIC         SIC            10           ABC            6 
+ 42| 12.5 FF FFFF 10A 90 
+ 3.75          2             4            -3            -2             3 
+-1 
+cero
+ 5             3628800 
+i = 0 
+k = 128 
+en gosub
+  3.14   $1,234.50   -5  ABCD  x
+Error 11 : atrapado
+despues del error
+Error 6 : atrapado
+fin
